@@ -1,0 +1,37 @@
+{
+  "name": "grok-windows-app",
+  "version": "1.0.1",
+  "description": "Grok desktop application.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "npm run audit:branding",
+    "audit:branding": "node scripts/audit-branding.js",
+    "build": "electron-builder build --win --publish never",
+    "dist": "electron-builder build --win --publish always"
+  },
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "electron": "^31.2.0",
+    "electron-builder": "^24.9.1"
+  },
+  "build": {
+    "appId": "com.nwn900.grokwindowsapp",
+    "productName": "Grok",
+    "asar": true,
+    "files": [
+      "main.js",
+      "package.json",
+      "icon.ico"
+    ],
+    "win": {
+      "signAndEditExecutable": false,
+      "target": [
+        "nsis"
+      ],
+      "artifactName": "Grok-Setup-${version}.${ext}",
+      "icon": "icon.ico"
+    }
+  }
+}
