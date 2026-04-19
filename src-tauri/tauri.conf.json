@@ -1,0 +1,35 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicegui-org/nicegui/refs/heads/main/nicegui/static/tauri.schema.json",
+  "productName": "Grok",
+  "version": "1.1.0",
+  "identifier": "com.nwn900.grok",
+  "build": {
+    "frontendDist": "../frontend",
+    "devUrl": "https://grok.com/"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "dangerousDisableAssetCspModification": true,
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "installerIcon": "icons/icon.ico",
+        "headerImage": null,
+        "sidebarImage": null
+      }
+    }
+  }
+}
