@@ -40,7 +40,7 @@ ${StrLoc}
 !define HEADERIMAGE ""
 !define MAINBINARYNAME "grok-windows-app"
 !define MAINBINARYSRCPATH "C:\Users\micha\Gemini Windows App\scratch\GrokWindowsApp\src-tauri\target\release\grok-windows-app.exe"
-!define BUNDLEID "com.grok.app.v2"
+!define BUNDLEID "com.grok.app.v3"
 !define COPYRIGHT ""
 !define OUTFILE "nsis-output.exe"
 !define ARCH "x64"
@@ -56,7 +56,7 @@ ${StrLoc}
 !define MANUKEY "Software\${MANUFACTURER}"
 !define MANUPRODUCTKEY "${MANUKEY}\${PRODUCTNAME}"
 !define UNINSTALLERSIGNCOMMAND ""
-!define ESTIMATEDSIZE "4632"
+!define ESTIMATEDSIZE "4633"
 !define STARTMENUFOLDER ""
 
 Var PassiveMode
