@@ -28,7 +28,7 @@ ${StrLoc}
 
 !define WEBVIEW2APPGUID "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
 
-!define MANUFACTURER "nwn900"
+!define MANUFACTURER "grok"
 !define PRODUCTNAME "Grok"
 !define VERSION "1.1.0"
 !define VERSIONWITHBUILD "1.1.0.0"
@@ -40,7 +40,7 @@ ${StrLoc}
 !define HEADERIMAGE ""
 !define MAINBINARYNAME "grok-windows-app"
 !define MAINBINARYSRCPATH "C:\Users\micha\Gemini Windows App\scratch\GrokWindowsApp\src-tauri\target\release\grok-windows-app.exe"
-!define BUNDLEID "com.nwn900.grok"
+!define BUNDLEID "com.grok.app.v2"
 !define COPYRIGHT ""
 !define OUTFILE "nsis-output.exe"
 !define ARCH "x64"

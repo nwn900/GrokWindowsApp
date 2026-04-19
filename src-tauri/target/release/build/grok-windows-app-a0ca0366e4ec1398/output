@@ -3,8 +3,8 @@ cargo:rustc-check-cfg=cfg(desktop)
 cargo:rustc-cfg=desktop
 cargo:rustc-check-cfg=cfg(mobile)
 cargo:rerun-if-changed=C:\Users\micha\Gemini Windows App\scratch\GrokWindowsApp\src-tauri\tauri.conf.json
-cargo:rustc-env=TAURI_ANDROID_PACKAGE_NAME_APP_NAME=grok
-cargo:rustc-env=TAURI_ANDROID_PACKAGE_NAME_PREFIX=com_nwn900
+cargo:rustc-env=TAURI_ANDROID_PACKAGE_NAME_APP_NAME=v2
+cargo:rustc-env=TAURI_ANDROID_PACKAGE_NAME_PREFIX=com_grok_app
 cargo:rustc-check-cfg=cfg(dev)
 cargo:PERMISSION_FILES_PATH=C:\Users\micha\Gemini Windows App\scratch\GrokWindowsApp\src-tauri\target\release\build\grok-windows-app-a0ca0366e4ec1398\out\app-manifest\__app__-permission-files
 cargo:rerun-if-changed=capabilities

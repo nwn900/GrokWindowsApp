@@ -12,7 +12,7 @@ BLOCK "StringFileInfo"
 {
 BLOCK "000004b0"
 {
-VALUE "CompanyName", "nwn900"
+VALUE "CompanyName", "grok"
 VALUE "FileDescription", "Grok"
 VALUE "FileVersion", "1.1.0"
 VALUE "ProductName", "Grok"
