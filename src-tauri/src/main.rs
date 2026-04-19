@@ -50,6 +50,7 @@ fn main() {
                 WebviewUrl::External(target_url),
             )
             .title("Grok")
+            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
             .inner_size(1200.0, 900.0)
             .auto_resize()
             .on_navigation(|url| {
