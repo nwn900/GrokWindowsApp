@@ -1203,9 +1203,8 @@ dependencies = [
 
 [[package]]
 name = "grok-windows-app"
-version = "1.1.0"
+version = "1.1.6"
 dependencies = [
- "open",
  "serde",
  "serde_json",
  "tauri",

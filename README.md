@@ -8,6 +8,7 @@ A lightweight Windows desktop wrapper for Grok.
 - Single-instance app with tray access
 - Minimize-to-tray behavior with optional launch at Windows startup
 - Strict in-app navigation allowlist for Grok, X, Google, and Microsoft auth flows
+- Native popup handling for X and other OAuth-style login flows
 - Windows NSIS packaging through Electron Builder
 
 ## Development

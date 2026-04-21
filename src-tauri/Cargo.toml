@@ -1,6 +1,6 @@
 [package]
 name = "grok-windows-app"
-version = "1.1.0"
+version = "1.1.6"
 description = "A simple Windows desktop application for Grok"
 authors = ["nwn900"]
 license = "ISC"
@@ -15,7 +15,6 @@ tauri-plugin-shell = "2"
 tauri-plugin-autostart = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-open = "5"
 url = "2"
 
 [features]
