@@ -119,6 +119,7 @@ const INITIALIZATION_SCRIPT: &str = r#"
 const ALLOWED_HOSTS: &[&str] = &[
     "grok.com",
     "grokipedia.com",
+    "grokusercontent.com",
     "x.ai",
     "x.com",
     "twitter.com",
@@ -883,6 +884,7 @@ mod tests {
     fn allows_supported_auth_hosts() {
         assert!(is_allowed_host("grok.com"));
         assert!(is_allowed_host("auth.grokipedia.com"));
+        assert!(is_allowed_host("auth.grokusercontent.com"));
         assert!(is_allowed_host("api.x.com"));
         assert!(is_allowed_host("subdomain.microsoftonline.com"));
     }
