@@ -1,7 +1,10 @@
 // Prevents an extra console window on Windows in release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::{
+    fs,
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+};
 use tauri::{
     menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
@@ -18,6 +21,28 @@ const TARGET_URL: &str = "https://grok.com/";
 const WINDOW_TITLE: &str = "Grok";
 const USER_AGENT: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0";
+const WEBVIEW_DATA_DIR: &str = "webview2";
+const ADDITIONAL_BROWSER_ARGS: &str =
+    "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-blink-features=AutomationControlled --user-agent=\"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0\"";
+const INITIALIZATION_SCRIPT: &str = r#"
+    Object.defineProperty(navigator, 'webdriver', {
+        get: () => undefined,
+        configurable: true
+    });
+
+    if (window.chrome && 'webview' in window.chrome) {
+        try {
+            Object.defineProperty(window.chrome, 'webview', {
+                get: () => undefined,
+                configurable: true
+            });
+        } catch (_) {
+            try {
+                delete window.chrome.webview;
+            } catch (_) {}
+        }
+    }
+"#;
 
 const ALLOWED_HOSTS: &[&str] = &[
     "grok.com",
@@ -43,6 +68,14 @@ fn is_allowed_url(url: &url::Url) -> bool {
     match url.scheme() {
         "http" | "https" => url.host_str().is_some_and(is_allowed_host),
         "about" => url.path() == "blank",
+        "blob" => url
+            .path()
+            .split_once(':')
+            .and_then(|(scheme, rest)| match scheme {
+                "http" | "https" => url::Url::parse(&format!("{scheme}:{rest}")).ok(),
+                _ => None,
+            })
+            .is_some_and(|inner_url| inner_url.host_str().is_some_and(is_allowed_host)),
         _ => false,
     }
 }
@@ -61,11 +94,16 @@ fn main() {
         .setup(|app| {
             let target_url: url::Url = TARGET_URL.parse().unwrap();
             let popup_app_handle = app.handle().clone();
+            let webview_data_dir = app.path().app_local_data_dir()?.join(WEBVIEW_DATA_DIR);
+            fs::create_dir_all(&webview_data_dir)?;
 
             let main_window =
                 WebviewWindowBuilder::new(app, "main", WebviewUrl::External(target_url))
                     .title(WINDOW_TITLE)
                     .user_agent(USER_AGENT)
+                    .additional_browser_args(ADDITIONAL_BROWSER_ARGS)
+                    .data_directory(webview_data_dir.clone())
+                    .initialization_script(INITIALIZATION_SCRIPT)
                     .inner_size(1200.0, 900.0)
                     .auto_resize()
                     .on_navigation(is_allowed_url)
@@ -81,6 +119,9 @@ fn main() {
                         )
                         .title(WINDOW_TITLE)
                         .user_agent(USER_AGENT)
+                        .additional_browser_args(ADDITIONAL_BROWSER_ARGS)
+                        .data_directory(webview_data_dir.clone())
+                        .initialization_script(INITIALIZATION_SCRIPT)
                         .window_features(features)
                         .on_navigation(is_allowed_url)
                         .on_document_title_changed(|window, title| {
@@ -204,10 +245,14 @@ mod tests {
     fn allows_about_blank_and_whitelisted_urls() {
         let grok_callback: url::Url = "https://grok.com/auth/callback".parse().unwrap();
         let blank: url::Url = "about:blank".parse().unwrap();
+        let blob: url::Url = "blob:https://x.com/12345678-1234-1234-1234-123456789012"
+            .parse()
+            .unwrap();
         let blocked: url::Url = "https://example.com/login".parse().unwrap();
 
         assert!(is_allowed_url(&grok_callback));
         assert!(is_allowed_url(&blank));
+        assert!(is_allowed_url(&blob));
         assert!(!is_allowed_url(&blocked));
     }
 }
