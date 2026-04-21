@@ -19,6 +19,7 @@ static NEXT_POPUP_ID: AtomicUsize = AtomicUsize::new(1);
 
 const TARGET_URL: &str = "https://grok.com/";
 const WINDOW_TITLE: &str = "Grok";
+const POPUP_URL: &str = "about:blank";
 const USER_AGENT: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0";
 const WEBVIEW_DATA_DIR: &str = "webview2";
@@ -112,12 +113,15 @@ fn main() {
                             return NewWindowResponse::Deny;
                         }
 
+                        let popup_url: url::Url = POPUP_URL.parse().unwrap();
                         let popup_builder = WebviewWindowBuilder::new(
                             &popup_app_handle,
                             next_popup_label(),
-                            WebviewUrl::External(url.clone()),
+                            WebviewUrl::External(popup_url),
                         )
-                        .title(WINDOW_TITLE)
+                        // Tauri/Wry binds requested popup URL/opener state into the created webview.
+                        // Starting popup at about:blank avoids double-loading the target URL.
+                        .title(url.as_str())
                         .user_agent(USER_AGENT)
                         .additional_browser_args(ADDITIONAL_BROWSER_ARGS)
                         .data_directory(webview_data_dir.clone())
