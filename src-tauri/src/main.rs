@@ -47,7 +47,7 @@ const WEB_RESOURCE_FILTERS: &[&str] = &[
     "https://t.co/*",
 ];
 const ADDITIONAL_BROWSER_ARGS: &str =
-    "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-blink-features=AutomationControlled --user-agent=\"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0\"";
+    "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,UserAgentClientHint --disable-blink-features=AutomationControlled --user-agent=\"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0\"";
 const RUNTIME_DIAGNOSTIC_SCRIPT: &str = r#"
     (() => {
         if (window.__GROK_DIAG_RUNTIME_INSTALLED__) {
@@ -186,6 +186,10 @@ const INITIALIZATION_SCRIPT: &str = r#"
         window.chrome && window.chrome.webview && typeof window.chrome.webview.postMessage === 'function'
             ? window.chrome.webview
             : null;
+    const __grokChromiumBrands = Object.freeze([
+        { brand: 'Not_A Brand', version: '24' },
+        { brand: 'Chromium', version: '124' }
+    ]);
 
     function __grokClip(value) {
         if (value === null || value === undefined) {
@@ -260,6 +264,51 @@ const INITIALIZATION_SCRIPT: &str = r#"
     window.__GROK_DIAG_POST = function (kind, payload) {
         __grokSend(kind, payload);
     };
+
+    function __grokBuildUserAgentData() {
+        return {
+            brands: __grokChromiumBrands,
+            mobile: false,
+            platform: 'Windows',
+            toJSON() {
+                return {
+                    brands: this.brands,
+                    mobile: this.mobile,
+                    platform: this.platform
+                };
+            },
+            async getHighEntropyValues(hints = []) {
+                const values = {
+                    architecture: 'x86',
+                    bitness: '64',
+                    mobile: false,
+                    model: '',
+                    platform: 'Windows',
+                    platformVersion: '10.0.0',
+                    uaFullVersion: '124.0.0.0',
+                    fullVersionList: __grokChromiumBrands.map((brand) => ({
+                        brand: brand.brand,
+                        version: brand.version
+                    })),
+                    wow64: false
+                };
+
+                const selected = {
+                    brands: __grokChromiumBrands,
+                    mobile: false,
+                    platform: 'Windows'
+                };
+
+                for (const hint of hints) {
+                    if (hint in values) {
+                        selected[hint] = values[hint];
+                    }
+                }
+
+                return selected;
+            }
+        };
+    }
 
     function __grokDescribeTarget(target) {
         if (!(target instanceof Element)) {
@@ -370,6 +419,15 @@ const INITIALIZATION_SCRIPT: &str = r#"
         get: () => undefined,
         configurable: true
     });
+
+    if ('userAgentData' in navigator) {
+        try {
+            Object.defineProperty(navigator, 'userAgentData', {
+                get: () => __grokBuildUserAgentData(),
+                configurable: true
+            });
+        } catch (_) {}
+    }
 
     if (window.chrome && 'webview' in window.chrome) {
         try {
