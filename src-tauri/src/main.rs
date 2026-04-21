@@ -22,7 +22,10 @@ use tauri_plugin_autostart::ManagerExt;
 #[cfg(windows)]
 use webview2_com::{
     CoTaskMemPWSTR, WebMessageReceivedEventHandler, WebResourceRequestedEventHandler,
+    WebResourceResponseReceivedEventHandler,
 };
+#[cfg(windows)]
+use windows::core::Interface;
 
 static IS_QUITTING: AtomicBool = AtomicBool::new(false);
 static NEXT_POPUP_ID: AtomicUsize = AtomicUsize::new(1);
@@ -30,8 +33,6 @@ static NEXT_POPUP_ID: AtomicUsize = AtomicUsize::new(1);
 const TARGET_URL: &str = "https://grok.com/";
 const WINDOW_TITLE: &str = "Grok";
 const POPUP_URL: &str = "about:blank";
-const USER_AGENT: &str =
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0";
 const DIAGNOSTICS_DIR: &str = "diagnostics";
 const AUTH_DEBUG_LOG: &str = "auth-debug.log";
 const AUTH_DIAGNOSTIC_CHANNEL: &str = "grok-auth-diag";
@@ -47,383 +48,55 @@ const WEB_RESOURCE_FILTERS: &[&str] = &[
     "https://t.co/*",
 ];
 const ADDITIONAL_BROWSER_ARGS: &str =
-    "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,UserAgentClientHint --disable-blink-features=AutomationControlled --user-agent=\"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0\"";
-const RUNTIME_DIAGNOSTIC_SCRIPT: &str = r#"
-    (() => {
-        if (window.__GROK_DIAG_RUNTIME_INSTALLED__) {
-            if (typeof window.__GROK_DIAG_POST === 'function') {
-                window.__GROK_DIAG_POST('runtime.reused', { detail: document.readyState });
-            }
-            return;
-        }
-
-        const post = typeof window.__GROK_DIAG_POST === 'function' ? window.__GROK_DIAG_POST : null;
-        if (!post) {
-            return;
-        }
-
-        window.__GROK_DIAG_RUNTIME_INSTALLED__ = true;
-
-        const clip = (value) => {
-            if (value === null || value === undefined) {
-                return undefined;
-            }
-
-            const text = String(value).replace(/\s+/g, ' ').trim();
-            if (!text) {
-                return undefined;
-            }
-
-            return text.length > 160 ? `${text.slice(0, 160)}...` : text;
-        };
-
-        const sanitizeUrl = (raw) => {
-            if (!raw) {
-                return undefined;
-            }
-
-            try {
-                const url = new URL(String(raw), window.location.href);
-                const keys = [...new Set(Array.from(url.searchParams.keys()))];
-                url.search = '';
-                url.hash = '';
-                const base = url.toString();
-                return keys.length ? `${base}?${keys.join(',')}` : base;
-            } catch (_) {
-                return clip(raw);
-            }
-        };
-
-        const describeTarget = (target) => {
-            if (!(target instanceof Element)) {
-                return undefined;
-            }
-
-            const element = target.closest('button, a, input[type=\"submit\"], input[type=\"button\"], [role=\"button\"]');
-            if (!element) {
-                return undefined;
-            }
-
-            const parts = [element.tagName.toLowerCase()];
-            const text = clip(element.textContent || element.getAttribute('value'));
-            const name = clip(element.getAttribute('name'));
-            const href = sanitizeUrl(element.getAttribute('href'));
-
-            if (text) {
-                parts.push(`text=${text}`);
-            }
-            if (name) {
-                parts.push(`name=${name}`);
-            }
-            if (href) {
-                parts.push(`href=${href}`);
-            }
-
-            return parts.join(' ');
-        };
-
-        const describeForm = (form) => {
-            if (!(form instanceof HTMLFormElement)) {
-                return undefined;
-            }
-
-            const method = clip(form.method || 'get') || 'get';
-            const action = sanitizeUrl(form.action || window.location.href) || 'same-page';
-            return clip(`method=${method} action=${action}`);
-        };
-
-        document.addEventListener('submit', (event) => {
-            post('runtime.submit', { detail: describeForm(event.target) });
-        }, true);
-
-        document.addEventListener('click', (event) => {
-            const target = describeTarget(event.target);
-            if (target) {
-                post('runtime.click', { target });
-            }
-        }, true);
-
-        window.addEventListener('beforeunload', () => post('runtime.beforeunload'));
-        window.addEventListener('unload', () => post('runtime.unload'));
-        window.addEventListener('pageshow', (event) =>
-            post('runtime.pageshow', { detail: event.persisted ? 'persisted=true' : 'persisted=false' })
-        );
-        window.addEventListener('pagehide', (event) =>
-            post('runtime.pagehide', { detail: event.persisted ? 'persisted=true' : 'persisted=false' })
-        );
-        window.addEventListener('popstate', () => post('runtime.popstate'));
-        window.addEventListener('hashchange', () => post('runtime.hashchange'));
-        window.addEventListener('error', (event) =>
-            post('runtime.error', { detail: event.message || event.filename })
-        );
-        window.addEventListener('unhandledrejection', (event) =>
-            post('runtime.unhandledrejection', { detail: event.reason })
-        );
-        document.addEventListener('visibilitychange', () =>
-            post('runtime.visibilitychange', { detail: document.visibilityState })
-        );
-
-        if (window.HTMLFormElement && window.HTMLFormElement.prototype.submit) {
-            const originalSubmit = window.HTMLFormElement.prototype.submit;
-            if (!originalSubmit.__grokDiagWrapped) {
-                const wrappedSubmit = function (...args) {
-                    post('runtime.form.submit()', { detail: describeForm(this) });
-                    return originalSubmit.apply(this, args);
-                };
-                wrappedSubmit.__grokDiagWrapped = true;
-                window.HTMLFormElement.prototype.submit = wrappedSubmit;
-            }
-        }
-
-        post('runtime.installed', { detail: document.readyState });
-    })();
-"#;
+    "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection";
 const INITIALIZATION_SCRIPT: &str = r#"
-    const __GROK_DIAGNOSTIC_CHANNEL__ = 'grok-auth-diag';
-    const __grokOriginalWebviewDescriptor =
-        window.chrome ? Object.getOwnPropertyDescriptor(window.chrome, 'webview') : undefined;
-    let __grokAuthBridge =
-        window.chrome && window.chrome.webview && typeof window.chrome.webview.postMessage === 'function'
-            ? window.chrome.webview
-            : null;
-    const __grokChromiumBrands = Object.freeze([
-        { brand: 'Not_A Brand', version: '24' },
-        { brand: 'Chromium', version: '124' }
-    ]);
-
-    function __grokClip(value) {
-        if (value === null || value === undefined) {
-            return undefined;
-        }
-
-        const text = String(value).replace(/\s+/g, ' ').trim();
-        if (!text) {
-            return undefined;
-        }
-
-        return text.length > 160 ? `${text.slice(0, 160)}...` : text;
+    function __grokFilterBrands(brands) {
+        return Array.isArray(brands)
+            ? brands.filter((brand) => brand && !/webview2/i.test(String(brand.brand || '')))
+            : brands;
     }
 
-    function __grokSanitizeUrl(raw) {
-        if (!raw) {
-            return undefined;
-        }
-
+    if ('userAgentData' in navigator && navigator.userAgentData) {
         try {
-            const url = new URL(String(raw), window.location.href);
-            const keys = [...new Set(Array.from(url.searchParams.keys()))];
-            url.search = '';
-            url.hash = '';
-            const base = url.toString();
-            return keys.length ? `${base}?${keys.join(',')}` : base;
-        } catch (_) {
-            return __grokClip(raw);
-        }
-    }
-
-    function __grokResolveBridge() {
-        if (__grokAuthBridge && typeof __grokAuthBridge.postMessage === 'function') {
-            return __grokAuthBridge;
-        }
-
-        try {
-            const candidate =
-                window.chrome && __grokOriginalWebviewDescriptor
-                    ? typeof __grokOriginalWebviewDescriptor.get === 'function'
-                        ? __grokOriginalWebviewDescriptor.get.call(window.chrome)
-                        : __grokOriginalWebviewDescriptor.value
-                    : null;
-
-            if (candidate && typeof candidate.postMessage === 'function') {
-                __grokAuthBridge = candidate;
-                return candidate;
-            }
-        } catch (_) {}
-
-        return null;
-    }
-
-    function __grokSend(kind, payload = {}) {
-        const bridge = __grokResolveBridge();
-        if (!bridge) {
-            return;
-        }
-
-        try {
-            bridge.postMessage({
-                channel: __GROK_DIAGNOSTIC_CHANNEL__,
-                kind,
-                location: __grokSanitizeUrl(window.location.href),
-                title: __grokClip(document.title),
-                detail: __grokClip(payload.detail),
-                target: __grokClip(payload.target),
-            });
-        } catch (_) {}
-    }
-
-    window.__GROK_DIAG_POST = function (kind, payload) {
-        __grokSend(kind, payload);
-    };
-
-    function __grokBuildUserAgentData() {
-        return {
-            brands: __grokChromiumBrands,
-            mobile: false,
-            platform: 'Windows',
-            toJSON() {
-                return {
-                    brands: this.brands,
-                    mobile: this.mobile,
-                    platform: this.platform
-                };
-            },
-            async getHighEntropyValues(hints = []) {
-                const values = {
-                    architecture: 'x86',
-                    bitness: '64',
-                    mobile: false,
-                    model: '',
-                    platform: 'Windows',
-                    platformVersion: '10.0.0',
-                    uaFullVersion: '124.0.0.0',
-                    fullVersionList: __grokChromiumBrands.map((brand) => ({
-                        brand: brand.brand,
-                        version: brand.version
-                    })),
-                    wow64: false
-                };
-
-                const selected = {
-                    brands: __grokChromiumBrands,
-                    mobile: false,
-                    platform: 'Windows'
-                };
-
-                for (const hint of hints) {
-                    if (hint in values) {
-                        selected[hint] = values[hint];
+            const originalUserAgentData = navigator.userAgentData;
+            const patchedUserAgentData = {
+                get brands() {
+                    return __grokFilterBrands(originalUserAgentData.brands);
+                },
+                get mobile() {
+                    return originalUserAgentData.mobile;
+                },
+                get platform() {
+                    return originalUserAgentData.platform;
+                },
+                toJSON() {
+                    const base =
+                        typeof originalUserAgentData.toJSON === 'function'
+                            ? originalUserAgentData.toJSON()
+                            : {
+                                  brands: originalUserAgentData.brands,
+                                  mobile: originalUserAgentData.mobile,
+                                  platform: originalUserAgentData.platform
+                              };
+                    return {
+                        ...base,
+                        brands: __grokFilterBrands(base.brands)
+                    };
+                },
+                async getHighEntropyValues(hints = []) {
+                    const values = await originalUserAgentData.getHighEntropyValues(hints);
+                    if ('brands' in values) {
+                        values.brands = __grokFilterBrands(values.brands);
                     }
+                    if ('fullVersionList' in values) {
+                        values.fullVersionList = __grokFilterBrands(values.fullVersionList);
+                    }
+                    return values;
                 }
+            };
 
-                return selected;
-            }
-        };
-    }
-
-    function __grokDescribeTarget(target) {
-        if (!(target instanceof Element)) {
-            return undefined;
-        }
-
-        const element = target.closest('button, a, input[type=\"submit\"], input[type=\"button\"], [role=\"button\"]');
-        if (!element) {
-            return undefined;
-        }
-
-        const parts = [element.tagName.toLowerCase()];
-        const text = __grokClip(element.textContent || element.getAttribute('value'));
-        const name = __grokClip(element.getAttribute('name'));
-        const href = __grokSanitizeUrl(element.getAttribute('href'));
-
-        if (text) {
-            parts.push(`text=${text}`);
-        }
-        if (name) {
-            parts.push(`name=${name}`);
-        }
-        if (href) {
-            parts.push(`href=${href}`);
-        }
-
-        return parts.join(' ');
-    }
-
-    function __grokDescribeForm(form) {
-        if (!(form instanceof HTMLFormElement)) {
-            return undefined;
-        }
-
-        const method = __grokClip(form.method || 'get') || 'get';
-        const action = __grokSanitizeUrl(form.action || window.location.href) || 'same-page';
-        return __grokClip(`method=${method} action=${action}`);
-    }
-
-    const __grokPushState = history.pushState.bind(history);
-    history.pushState = function (...args) {
-        __grokSend('history.pushState', { detail: __grokSanitizeUrl(args[2]) });
-        return __grokPushState(...args);
-    };
-
-    const __grokReplaceState = history.replaceState.bind(history);
-    history.replaceState = function (...args) {
-        __grokSend('history.replaceState', { detail: __grokSanitizeUrl(args[2]) });
-        return __grokReplaceState(...args);
-    };
-
-    if (window.HTMLFormElement && window.HTMLFormElement.prototype.submit) {
-        const __grokSubmit = window.HTMLFormElement.prototype.submit;
-        window.HTMLFormElement.prototype.submit = function (...args) {
-            __grokSend('form.submit()', { detail: __grokDescribeForm(this) });
-            return __grokSubmit.apply(this, args);
-        };
-    }
-
-    document.addEventListener(
-        'submit',
-        (event) => {
-            __grokSend('submit', { detail: __grokDescribeForm(event.target) });
-        },
-        true
-    );
-
-    document.addEventListener(
-        'click',
-        (event) => {
-            const target = __grokDescribeTarget(event.target);
-            if (target) {
-                __grokSend('click', { target });
-            }
-        },
-        true
-    );
-
-    document.addEventListener('DOMContentLoaded', () => __grokSend('DOMContentLoaded'));
-    window.addEventListener('load', () => __grokSend('load'));
-    window.addEventListener('pageshow', (event) =>
-        __grokSend('pageshow', { detail: event.persisted ? 'persisted=true' : 'persisted=false' })
-    );
-    window.addEventListener('pagehide', (event) =>
-        __grokSend('pagehide', { detail: event.persisted ? 'persisted=true' : 'persisted=false' })
-    );
-    window.addEventListener('beforeunload', () => __grokSend('beforeunload'));
-    window.addEventListener('unload', () => __grokSend('unload'));
-    window.addEventListener('popstate', () => __grokSend('popstate'));
-    window.addEventListener('hashchange', () => __grokSend('hashchange'));
-    window.addEventListener('error', (event) =>
-        __grokSend('error', { detail: event.message || event.filename })
-    );
-    window.addEventListener('unhandledrejection', (event) =>
-        __grokSend('unhandledrejection', { detail: event.reason })
-    );
-    document.addEventListener('readystatechange', () =>
-        __grokSend('readystatechange', { detail: document.readyState })
-    );
-    document.addEventListener('visibilitychange', () =>
-        __grokSend('visibilitychange', { detail: document.visibilityState })
-    );
-    __grokSend('script.init', {
-        detail: __grokResolveBridge() ? 'bridge=ready' : 'bridge=missing'
-    });
-
-    Object.defineProperty(navigator, 'webdriver', {
-        get: () => undefined,
-        configurable: true
-    });
-
-    if ('userAgentData' in navigator) {
-        try {
             Object.defineProperty(navigator, 'userAgentData', {
-                get: () => __grokBuildUserAgentData(),
+                get: () => patchedUserAgentData,
                 configurable: true
             });
         } catch (_) {}
@@ -573,6 +246,47 @@ fn summarize_url_text(value: &str) -> String {
         .unwrap_or_else(|_| clip_for_log(value, 180))
 }
 
+fn strip_webview2_brand(value: &str) -> Option<String> {
+    let filtered = value
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty() && !part.to_ascii_lowercase().contains("webview2"))
+        .collect::<Vec<_>>();
+
+    let joined = filtered.join(", ");
+    (joined != value && !joined.is_empty()).then_some(joined)
+}
+
+#[cfg(windows)]
+unsafe fn get_request_header(
+    headers: &webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2HttpRequestHeaders,
+    name: &str,
+) -> Option<String> {
+    let header_name = CoTaskMemPWSTR::from(name);
+    let mut value = Default::default();
+    headers
+        .GetHeader(*header_name.as_ref().as_pcwstr(), &mut value)
+        .ok()?;
+
+    let value = CoTaskMemPWSTR::from(value).to_string();
+    (!value.trim().is_empty()).then_some(value)
+}
+
+#[cfg(windows)]
+unsafe fn get_response_header(
+    headers: &webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2HttpResponseHeaders,
+    name: &str,
+) -> Option<String> {
+    let header_name = CoTaskMemPWSTR::from(name);
+    let mut value = Default::default();
+    headers
+        .GetHeader(*header_name.as_ref().as_pcwstr(), &mut value)
+        .ok()?;
+
+    let value = CoTaskMemPWSTR::from(value).to_string();
+    (!value.trim().is_empty()).then_some(value)
+}
+
 fn is_auth_related_resource(url_text: &str) -> bool {
     let Ok(url) = url::Url::parse(url_text) else {
         return false;
@@ -708,13 +422,60 @@ fn attach_webview2_diagnostics<R: tauri::Runtime>(
                                     let uri = CoTaskMemPWSTR::from(uri).to_string();
                                     if is_auth_related_resource(&uri) {
                                         let method = CoTaskMemPWSTR::from(method).to_string();
+                                        let mut extra = String::new();
+                                        if let Ok(headers) = request.Headers() {
+                                            for header_name in
+                                                ["sec-ch-ua", "sec-ch-ua-full-version-list"]
+                                            {
+                                                if let Some(original_value) =
+                                                    get_request_header(&headers, header_name)
+                                                {
+                                                    if let Some(filtered_value) =
+                                                        strip_webview2_brand(&original_value)
+                                                    {
+                                                        let header_name_ptr =
+                                                            CoTaskMemPWSTR::from(header_name);
+                                                        let filtered_value_ptr =
+                                                            CoTaskMemPWSTR::from(
+                                                                filtered_value.as_str(),
+                                                            );
+                                                        let _ = headers.SetHeader(
+                                                            *header_name_ptr
+                                                                .as_ref()
+                                                                .as_pcwstr(),
+                                                            *filtered_value_ptr
+                                                                .as_ref()
+                                                                .as_pcwstr(),
+                                                        );
+                                                    }
+                                                }
+                                            }
+
+                                            if let Some(user_agent) =
+                                                get_request_header(&headers, "user-agent")
+                                            {
+                                                extra.push_str(&format!(
+                                                    " ua={}",
+                                                    clip_for_log(&user_agent, 80)
+                                                ));
+                                            }
+                                            if let Some(client_hints) =
+                                                get_request_header(&headers, "sec-ch-ua")
+                                            {
+                                                extra.push_str(&format!(
+                                                    " sec-ch-ua={}",
+                                                    clip_for_log(&client_hints, 80)
+                                                ));
+                                            }
+                                        }
                                         request_logger.log(
                                             "resource-request",
                                             Some(&request_label),
                                             format!(
-                                                "method={} url={}",
+                                                "method={} url={}{}",
                                                 clip_for_log(&method, 12),
-                                                summarize_url_text(&uri)
+                                                summarize_url_text(&uri),
+                                                extra
                                             ),
                                         );
                                     }
@@ -735,6 +496,97 @@ fn attach_webview2_diagnostics<R: tauri::Runtime>(
                         "resource-request",
                         Some(&label_for_handler),
                         format!("failed_to_attach_resource_handler={error}"),
+                    ),
+                }
+
+                match webview.cast::<webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2_2>() {
+                    Ok(webview_v2) => {
+                        let response_logger = logger_for_handler.clone();
+                        let response_label = label_for_handler.clone();
+                        let mut response_token = 0;
+                        match webview_v2.add_WebResourceResponseReceived(
+                            &WebResourceResponseReceivedEventHandler::create(Box::new(
+                                move |_sender, args| {
+                                    if let Some(args) = args {
+                                        if let Ok(request) = args.Request() {
+                                            let mut uri = Default::default();
+                                            if request.Uri(&mut uri).is_ok() {
+                                                let uri = CoTaskMemPWSTR::from(uri).to_string();
+                                                if is_auth_related_resource(&uri) {
+                                                    if let Ok(response) = args.Response() {
+                                                        let mut status_code = 0;
+                                                        let _ = response.StatusCode(&mut status_code);
+                                                        let mut reason_phrase = Default::default();
+                                                        let reason = if response
+                                                            .ReasonPhrase(&mut reason_phrase)
+                                                            .is_ok()
+                                                        {
+                                                            clip_for_log(
+                                                                &CoTaskMemPWSTR::from(
+                                                                    reason_phrase,
+                                                                )
+                                                                .to_string(),
+                                                                40,
+                                                            )
+                                                        } else {
+                                                            String::new()
+                                                        };
+                                                        let mut extra = String::new();
+                                                        if let Ok(headers) = response.Headers() {
+                                                            if let Some(location) =
+                                                                get_response_header(
+                                                                    &headers, "location",
+                                                                )
+                                                            {
+                                                                extra.push_str(&format!(
+                                                                    " location={}",
+                                                                    summarize_url_text(&location)
+                                                                ));
+                                                            }
+                                                        }
+
+                                                        response_logger.log(
+                                                            "resource-response",
+                                                            Some(&response_label),
+                                                            format!(
+                                                                "status={} reason={} url={}{}",
+                                                                status_code,
+                                                                if reason.is_empty() {
+                                                                    "-"
+                                                                } else {
+                                                                    &reason
+                                                                },
+                                                                summarize_url_text(&uri),
+                                                                extra
+                                                            ),
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    Ok(())
+                                },
+                            )),
+                            &mut response_token,
+                        ) {
+                            Ok(_) => logger_for_handler.log(
+                                "resource-response",
+                                Some(&label_for_handler),
+                                "web resource response diagnostics attached",
+                            ),
+                            Err(error) => logger_for_handler.log(
+                                "resource-response",
+                                Some(&label_for_handler),
+                                format!("failed_to_attach_response_handler={error}"),
+                            ),
+                        }
+                    }
+                    Err(error) => logger_for_handler.log(
+                        "resource-response",
+                        Some(&label_for_handler),
+                        format!("failed_to_cast_core_webview2_2={error}"),
                     ),
                 }
             }
@@ -784,7 +636,7 @@ fn instrument_webview_builder<'a, R: tauri::Runtime, M: Manager<R>>(
             );
             allowed
         })
-        .on_page_load(move |window, payload| {
+        .on_page_load(move |_window, payload| {
             let event = match payload.event() {
                 PageLoadEvent::Started => "started",
                 PageLoadEvent::Finished => "finished",
@@ -795,16 +647,6 @@ fn instrument_webview_builder<'a, R: tauri::Runtime, M: Manager<R>>(
                 Some(page_label.as_str()),
                 format!("event={event} url={}", summarize_url(payload.url())),
             );
-
-            if matches!(payload.event(), PageLoadEvent::Finished) {
-                if let Err(error) = window.eval(RUNTIME_DIAGNOSTIC_SCRIPT) {
-                    page_logger.log(
-                        "page-load",
-                        Some(page_label.as_str()),
-                        format!("runtime_inject_failed={error}"),
-                    );
-                }
-            }
         })
         .on_document_title_changed(move |window, title| {
             let window_title = if title.trim().is_empty() {
@@ -854,7 +696,6 @@ fn main() {
             let main_window = instrument_webview_builder(
                 WebviewWindowBuilder::new(app, "main", WebviewUrl::External(target_url))
                     .title(WINDOW_TITLE)
-                    .user_agent(USER_AGENT)
                     .additional_browser_args(ADDITIONAL_BROWSER_ARGS)
                     .data_directory(webview_data_dir.clone())
                     .initialization_script(INITIALIZATION_SCRIPT)
@@ -889,7 +730,6 @@ fn main() {
                                 // Tauri/Wry binds requested popup URL/opener state into the created webview.
                                 // Starting popup at about:blank avoids double-loading the target URL.
                                 .title(url.as_str())
-                                .user_agent(USER_AGENT)
                                 .additional_browser_args(ADDITIONAL_BROWSER_ARGS)
                                 .data_directory(webview_data_dir.clone())
                                 .initialization_script(INITIALIZATION_SCRIPT)

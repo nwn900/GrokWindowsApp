@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicegui-org/nicegui/refs/heads/main/nicegui/static/tauri.schema.json",
   "productName": "Grok",
-  "version": "1.1.10",
+  "version": "1.1.11",
   "identifier": "com.grok.app.v5",
   "build": {
     "frontendDist": "../frontend",
