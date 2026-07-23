@@ -14,7 +14,7 @@ use std::{
 use tauri::{
     menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
-    webview::{NewWindowResponse, PageLoadEvent},
+    webview::{DownloadEvent, NewWindowResponse, PageLoadEvent},
     Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent,
 };
 use tauri_plugin_autostart::MacosLauncher;
@@ -630,13 +630,21 @@ fn instrument_webview_builder<'a, R: tauri::Runtime, M: Manager<R>>(
 
     builder
         .on_navigation(move |url| {
-            let allowed = is_allowed_url(url);
+            if is_allowed_url(url) {
+                nav_logger.log(
+                    "navigation",
+                    Some(nav_label.as_str()),
+                    format!("allowed=true url={}", summarize_url(url)),
+                );
+                return true;
+            }
             nav_logger.log(
                 "navigation",
                 Some(nav_label.as_str()),
-                format!("allowed={allowed} url={}", summarize_url(url)),
+                format!("allowed=false external=true url={}", summarize_url(url)),
             );
-            allowed
+            let _ = open::that_detached(url.as_str());
+            false
         })
         .on_page_load(move |_window, payload| {
             let event = match payload.event() {
@@ -709,6 +717,30 @@ fn main() {
                     .initialization_script(INITIALIZATION_SCRIPT)
                     .inner_size(1200.0, 900.0)
                     .auto_resize()
+                    .disable_drag_drop_handler()
+                    .on_download(|_webview, event| {
+                        match event {
+                            DownloadEvent::Requested { destination, .. } => {
+                                let filename = destination
+                                    .file_name()
+                                    .and_then(|s| s.to_str())
+                                    .unwrap_or("download")
+                                    .to_string();
+                                let mut dlg = rfd::FileDialog::new().set_file_name(&filename);
+                                if let Some(dir) = destination.parent() {
+                                    dlg = dlg.set_directory(dir);
+                                }
+                                if let Some(path) = dlg.save_file() {
+                                    *destination = path;
+                                    true
+                                } else {
+                                    false
+                                }
+                            }
+                            DownloadEvent::Finished { .. } => true,
+                            _ => true,
+                        }
+                    })
                     .on_new_window({
                         let popup_logger = logger.clone();
                         move |url, features| {
@@ -787,6 +819,11 @@ fn main() {
                         let _ = win_clone.hide();
                     }
                 }
+                WindowEvent::Focused(true) => {
+                    let _ = win_clone.eval(
+                        "document.querySelector('[role=\"main\"]')?.focus({preventScroll:true});",
+                    );
+                }
                 _ => {}
             });
 
@@ -794,6 +831,8 @@ fn main() {
             let is_enabled = app.autolaunch().is_enabled().unwrap_or(false);
 
             let open_item = MenuItem::with_id(app, "open", "Open Grok", true, None::<&str>)?;
+            let refresh_item = MenuItem::with_id(app, "refresh", "Refresh Grok", true, None::<&str>)?;
+            let login_item = MenuItem::with_id(app, "login", "Login...", true, None::<&str>)?;
             let startup_item = CheckMenuItem::with_id(
                 app,
                 "startup",
@@ -816,6 +855,8 @@ fn main() {
                 app,
                 &[
                     &open_item,
+                    &refresh_item,
+                    &login_item,
                     &startup_item,
                     &log_item,
                     &separator,
@@ -832,6 +873,22 @@ fn main() {
                         if let Some(window) = app_handle.get_webview_window("main") {
                             let _ = window.show();
                             let _ = window.set_focus();
+                        }
+                    }
+                    "refresh" => {
+                        if let Some(window) = app_handle.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                            let _ = window.eval("window.location.reload();");
+                        }
+                    }
+                    "login" => {
+                        if let Some(window) = app_handle.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                            if let Ok(url) = url::Url::parse(TARGET_URL) {
+                                let _ = window.navigate(url);
+                            }
                         }
                     }
                     "startup" => {
