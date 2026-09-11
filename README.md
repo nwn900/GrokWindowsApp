@@ -1,54 +1,39 @@
-# Grok Windows App
+# Grok Desktop
 
-A lightweight Windows desktop wrapper for Grok.
+A Windows desktop app for Grok, built with Rust, Tauri 2 and Microsoft Edge WebView2.
+
+![Grok](icon.png)
+
+## Downloads
+
+[Download v1.2.1](https://github.com/nwn900/GrokWindowsApp/releases/tag/v1.2.1) — Windows x64 NSIS installer, compiled locally.
 
 ## Features
 
-- Direct access to `https://grok.com/`
-- Single-instance app with tray access
-- Minimize-to-tray behavior with optional launch at Windows startup
-- Strict in-app navigation allowlist for Grok, X, Google, and Microsoft auth flows
-- Native popup handling for X and other OAuth-style login flows
-- Windows NSIS packaging through Electron Builder
+- System tray, single instance, and hide on close.
+- Manual launch opens the window; Windows startup uses the explicit `--autostart` argument.
+- Answer-completion notifications while the main window is inactive. Click a notification to restore the app; use Test Notification in the tray menu to check Windows delivery.
+- Native authentication popups and file-download dialogs.
+- New transparent application and tray icons.
 
-## Development
+Completion detection observes page mutations and reads text without forcing layout. It does not continually scan an idle page. Selectors live in `src-tauri/src/notifications.js`; service redesigns can require selector updates. Native delivery status is recorded in a bounded `notifications.log` under the application's log directory.
 
-This project is meant to be built from a disposable Docker container so the host machine stays clean.
+## Build locally
 
-### Container Builder Image
+Install Rust's MSVC toolchain, Visual Studio C++ Build Tools, WebView2, and the Tauri CLI (`cargo install tauri-cli --locked`). Use a Visual Studio developer shell with `CC=cl.exe` and `CXX=cl.exe`.
 
-Build the reusable builder image:
-
-```bash
-docker build -t grok-electron-builder -f docker/builder.Dockerfile docker
+```powershell
+cd src-tauri
+cargo test --locked
+cargo tauri build -- --locked
 ```
 
-### Clone And Build In A Disposable Container
+The installer is generated in `target/release/bundle/nsis/`. To limit disk usage, set `CARGO_TARGET_DIR` to a dedicated directory on a drive with free space, set `CARGO_INCREMENTAL=0`, and build one app at a time. Copy completed installers outside the target directory before running `cargo clean`.
 
-```bash
-docker run --rm -it \
-  -v "$PWD:/workspace" \
-  -w /workspace \
-  grok-electron-builder \
-  bash -lc "npm ci && npm run audit:branding && npm run build"
-```
+Run JavaScript regression tests with `node --test tests/notifications.test.cjs`.
 
-### Smoke Test
+Releases are uploaded from local builds. Tag pushes do not run a GitHub installer build.
 
-```bash
-docker run --rm -it \
-  -v "$PWD:/workspace" \
-  -w /workspace \
-  grok-electron-builder \
-  bash -lc "npm ci && xvfb-run -a env ELECTRON_DISABLE_SANDBOX=1 SMOKE_TEST=1 npm start"
-```
+## Verification limits
 
-The smoke test exits automatically after the main window loads `grok.com`.
-
-## Output
-
-`npm run build` produces the Windows installer in `dist/`.
-
-## License
-
-ISC
+Automated tests cover wrapper logic and simulated page signals. Signed-in provider flows, real response completion, Windows notification visibility, and rendering timings require live verification. Windows notification settings and Do Not Disturb can suppress visible banners.

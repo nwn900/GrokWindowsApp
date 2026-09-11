@@ -27,6 +27,8 @@ use webview2_com::{
 #[cfg(windows)]
 use windows::core::Interface;
 
+mod notifications;
+
 static IS_QUITTING: AtomicBool = AtomicBool::new(false);
 static NEXT_POPUP_ID: AtomicUsize = AtomicUsize::new(1);
 
@@ -47,8 +49,7 @@ const WEB_RESOURCE_FILTERS: &[&str] = &[
     "https://*.twitter.com/*",
     "https://t.co/*",
 ];
-const ADDITIONAL_BROWSER_ARGS: &str =
-    "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection";
+const ADDITIONAL_BROWSER_ARGS: &str = "--disable-background-timer-throttling";
 const INITIALIZATION_SCRIPT: &str = r#"
     function __grokFilterBrands(brands) {
         return Array.isArray(brands)
@@ -102,18 +103,6 @@ const INITIALIZATION_SCRIPT: &str = r#"
         } catch (_) {}
     }
 
-    if (window.chrome && 'webview' in window.chrome) {
-        try {
-            Object.defineProperty(window.chrome, 'webview', {
-                get: () => undefined,
-                configurable: true
-            });
-        } catch (_) {
-            try {
-                delete window.chrome.webview;
-            } catch (_) {}
-        }
-    }
 "#;
 
 const ALLOWED_HOSTS: &[&str] = &[
@@ -134,7 +123,7 @@ const ALLOWED_HOSTS: &[&str] = &[
 
 #[derive(Clone)]
 struct AuthLogger {
-    file: Arc<Mutex<File>>,
+    file: Arc<Mutex<Option<File>>>,
 }
 
 #[derive(serde::Deserialize)]
@@ -154,16 +143,30 @@ struct JsDiagnosticMessage {
 impl AuthLogger {
     fn new(path: PathBuf) -> std::io::Result<Self> {
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
+            let _ = fs::create_dir_all(parent);
         }
 
-        let file = OpenOptions::new().create(true).append(true).open(&path)?;
+        let file = if std::env::var_os("DESKTOP_AUTH_DIAGNOSTICS").is_some() {
+            if fs::metadata(&path).is_ok_and(|meta| meta.len() > 1_048_576) {
+                let _ = fs::rename(&path, path.with_extension("previous.log"));
+            }
+            OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+                .ok()
+        } else {
+            None
+        };
         Ok(Self {
             file: Arc::new(Mutex::new(file)),
         })
     }
 
     fn log(&self, scope: &str, window_label: Option<&str>, message: impl AsRef<str>) {
+        if std::env::var_os("DESKTOP_AUTH_DIAGNOSTICS").is_none() {
+            return;
+        }
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -176,9 +179,11 @@ impl AuthLogger {
             message.as_ref()
         );
 
-        if let Ok(mut file) = self.file.lock() {
-            let _ = file.write_all(line.as_bytes());
-            let _ = file.flush();
+        if let Ok(mut slot) = self.file.lock() {
+            if let Some(file) = slot.as_mut() {
+                let _ = file.write_all(line.as_bytes());
+                let _ = file.flush();
+            }
         }
     }
 }
@@ -643,7 +648,9 @@ fn instrument_webview_builder<'a, R: tauri::Runtime, M: Manager<R>>(
                 Some(nav_label.as_str()),
                 format!("allowed=false external=true url={}", summarize_url(url)),
             );
-            let _ = open::that_detached(url.as_str());
+            if matches!(url.scheme(), "https" | "http" | "mailto") {
+                let _ = open::that_detached(url.as_str());
+            }
             false
         })
         .on_page_load(move |_window, payload| {
@@ -677,13 +684,16 @@ fn instrument_webview_builder<'a, R: tauri::Runtime, M: Manager<R>>(
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_notification::init())
+        .invoke_handler(tauri::generate_handler![notifications::notify_answer])
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
-            None,
+            Some(vec!["--autostart"]),
         ))
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
+                let _ = window.unminimize();
                 let _ = window.set_focus();
             }
         }))
@@ -715,31 +725,30 @@ fn main() {
                     .additional_browser_args(ADDITIONAL_BROWSER_ARGS)
                     .data_directory(webview_data_dir.clone())
                     .initialization_script(INITIALIZATION_SCRIPT)
+                    .initialization_script(include_str!("notifications.js"))
                     .inner_size(1200.0, 900.0)
                     .auto_resize()
                     .disable_drag_drop_handler()
-                    .on_download(|_webview, event| {
-                        match event {
-                            DownloadEvent::Requested { destination, .. } => {
-                                let filename = destination
-                                    .file_name()
-                                    .and_then(|s| s.to_str())
-                                    .unwrap_or("download")
-                                    .to_string();
-                                let mut dlg = rfd::FileDialog::new().set_file_name(&filename);
-                                if let Some(dir) = destination.parent() {
-                                    dlg = dlg.set_directory(dir);
-                                }
-                                if let Some(path) = dlg.save_file() {
-                                    *destination = path;
-                                    true
-                                } else {
-                                    false
-                                }
+                    .on_download(|_webview, event| match event {
+                        DownloadEvent::Requested { destination, .. } => {
+                            let filename = destination
+                                .file_name()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("download")
+                                .to_string();
+                            let mut dlg = rfd::FileDialog::new().set_file_name(&filename);
+                            if let Some(dir) = destination.parent() {
+                                dlg = dlg.set_directory(dir);
                             }
-                            DownloadEvent::Finished { .. } => true,
-                            _ => true,
+                            if let Some(path) = dlg.save_file() {
+                                *destination = path;
+                                true
+                            } else {
+                                false
+                            }
                         }
+                        DownloadEvent::Finished { .. } => true,
+                        _ => true,
                     })
                     .on_new_window({
                         let popup_logger = logger.clone();
@@ -806,7 +815,7 @@ fn main() {
             attach_webview2_diagnostics(&main_window, logger.clone());
 
             // If autostart is enabled, launch minimized to tray
-            if app.autolaunch().is_enabled().unwrap_or(false) {
+            if std::env::args().any(|arg| arg == "--autostart") {
                 let _ = main_window.hide();
             }
 
@@ -819,19 +828,17 @@ fn main() {
                         let _ = win_clone.hide();
                     }
                 }
-                WindowEvent::Focused(true) => {
-                    let _ = win_clone.eval(
-                        "document.querySelector('[role=\"main\"]')?.focus({preventScroll:true});",
-                    );
-                }
                 _ => {}
             });
 
             // Build system tray menu
             let is_enabled = app.autolaunch().is_enabled().unwrap_or(false);
 
+            let test_notif_item =
+                MenuItem::with_id(app, "test-notif", "Test Notification", true, None::<&str>)?;
             let open_item = MenuItem::with_id(app, "open", "Open Grok", true, None::<&str>)?;
-            let refresh_item = MenuItem::with_id(app, "refresh", "Refresh Grok", true, None::<&str>)?;
+            let refresh_item =
+                MenuItem::with_id(app, "refresh", "Refresh Grok", true, None::<&str>)?;
             let login_item = MenuItem::with_id(app, "login", "Login...", true, None::<&str>)?;
             let startup_item = CheckMenuItem::with_id(
                 app,
@@ -855,6 +862,7 @@ fn main() {
                 app,
                 &[
                     &open_item,
+                    &test_notif_item,
                     &refresh_item,
                     &login_item,
                     &startup_item,
@@ -872,12 +880,14 @@ fn main() {
                     "open" => {
                         if let Some(window) = app_handle.get_webview_window("main") {
                             let _ = window.show();
+                            let _ = window.unminimize();
                             let _ = window.set_focus();
                         }
                     }
                     "refresh" => {
                         if let Some(window) = app_handle.get_webview_window("main") {
                             let _ = window.show();
+                            let _ = window.unminimize();
                             let _ = window.set_focus();
                             let _ = window.eval("window.location.reload();");
                         }
@@ -885,11 +895,16 @@ fn main() {
                     "login" => {
                         if let Some(window) = app_handle.get_webview_window("main") {
                             let _ = window.show();
+                            let _ = window.unminimize();
                             let _ = window.set_focus();
                             if let Ok(url) = url::Url::parse(TARGET_URL) {
                                 let _ = window.navigate(url);
                             }
                         }
+                    }
+                    "test-notif" => {
+                        let _ =
+                            notifications::send(app_handle, "Desktop notifications are enabled.");
                     }
                     "startup" => {
                         let manager = app_handle.autolaunch();
@@ -925,6 +940,7 @@ fn main() {
                         let app = tray.app_handle();
                         if let Some(window) = app.get_webview_window("main") {
                             let _ = window.show();
+                            let _ = window.unminimize();
                             let _ = window.set_focus();
                         }
                     }
